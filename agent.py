@@ -2,8 +2,8 @@ import pygame
 import random
 from collections import namedtuple
 import Learner
+from collections import deque
 import numpy as np
-import time
 
 pygame.init()
 
@@ -17,13 +17,15 @@ BLUE = (50, 153, 213)
 BLOCK_SIZE = 20
 DIS_WIDTH = 640
 DIS_HEIGHT = 480
-FRAMESPEED = 40
+QVALUES_N = 100
+FRAMESPEED = 50
 
 
 def GameLoop(learner):
     global dis
+
     dis = pygame.display.set_mode((DIS_WIDTH, DIS_HEIGHT))
-    pygame.display.set_caption("Snake AI Inference")
+    pygame.display.set_caption("Snake AI Training")
     clock = pygame.time.Clock()
 
     x1 = DIS_WIDTH // 2
@@ -40,9 +42,8 @@ def GameLoop(learner):
     )
 
     dead = False
+    reason = None
     while not dead:
-        pygame.event.get()  # Ensure the Pygame window updates
-
         action = learner.act(snake_list, food)
         if action == "left":
             x1_change = -BLOCK_SIZE
@@ -67,8 +68,12 @@ def GameLoop(learner):
             or snake_head.x < 0
             or snake_head.y >= DIS_HEIGHT
             or snake_head.y < 0
-            or snake_head in snake_list[:-1]
         ):
+            reason = "Screen"
+            dead = True
+
+        if snake_head in snake_list[:-1]:
+            reason = "Tail"
             dead = True
 
         if snake_head == food:
@@ -79,9 +84,9 @@ def GameLoop(learner):
                 * BLOCK_SIZE,
             )
             length_of_snake += 1
-        else:
-            if len(snake_list) > length_of_snake:
-                del snake_list[0]
+
+        if len(snake_list) > length_of_snake:
+            del snake_list[0]
 
         dis.fill(BLUE)
         DrawFood(food)
@@ -89,9 +94,11 @@ def GameLoop(learner):
         DrawScore(length_of_snake - 1)
         pygame.display.update()
 
+        learner.UpdateQValues(reason)
+
         clock.tick(FRAMESPEED)
 
-    return length_of_snake - 1
+    return length_of_snake - 1, reason
 
 
 def DrawFood(food):
@@ -110,21 +117,40 @@ def DrawScore(score):
     dis.blit(value, [10, 10])
 
 
-def KeepWindowOpen():
-    waiting = True
-    while waiting:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                waiting = False
-    pygame.quit()
+game_count = 1
+scores = []
+rolling_window = deque(maxlen=100)
+total_score = 0
 
 
 learner = Learner.Learner(DIS_WIDTH, DIS_HEIGHT, BLOCK_SIZE)
-learner.LoadQvalues()
+record = 0
 
-print("Running Snake AI Inference...")
-score = GameLoop(learner)
-print(f"Final Score: {score}")
+with open("output.txt", "a") as file:
+    for game_count in range(1, 2001):
+        learner.Reset()
 
-time.sleep(2)  # Keeps the window visible for a moment before waiting for user input
-KeepWindowOpen()
+        if game_count > 200:
+            learner.epsilon = 0
+        else:
+            learner.epsilon = 0.1
+
+        score, reason = GameLoop(learner)
+        total_score += score
+        scores.append(score)
+
+        rolling_window.append(score)
+        rolling_mean_score = np.mean(rolling_window)
+
+        if score > record:
+            record = score
+
+        file.write(f"{game_count} {score} {rolling_mean_score}\n")
+
+        print(
+            f"Game: {game_count}; Score: {score}; Record: {record}; Mean: {rolling_mean_score}"
+        )
+
+        if game_count % QVALUES_N == 0:
+            print("Saving Q-values...")
+            learner.SaveQvalues()
